@@ -18,7 +18,6 @@ import type {
   ImageFile,
   MatchResult,
   UploadResult,
-  StagedTarget,
 } from "../lib/types";
 
 // GraphQL query to fetch draft products
@@ -273,108 +272,73 @@ export default function Index() {
     if (matched.length === 0) return;
 
     setIsUploadingState(true);
-    setUploadProgress("Preparing uploads...");
+    setUploadProgress("Starting uploads...");
     setUploadResults([]);
 
+    const results: UploadResult[] = [];
+
     try {
-      // Step 1: Get staged upload URLs from Shopify
-      const uploadRequests = matched.map((r) => ({
-        productId: r.product!.id,
-        filename: r.image.name,
-        mimeType: r.image.type || "image/png",
-        fileSize: r.image.size,
-      }));
-
-      const stagedResponse = await fetch("/app/api/upload", {
-        method: "POST",
-        body: new URLSearchParams({
-          intent: "get-upload-urls",
-          uploads: JSON.stringify(uploadRequests),
-        }),
-      });
-      const stagedData = await stagedResponse.json();
-
-      if (!stagedData.success) {
-        throw new Error(stagedData.error || "Failed to get upload URLs");
-      }
-
-      const targets: StagedTarget[] = stagedData.targets;
-      const successfulUploads: Array<{ productId: string; resourceUrl: string; filename: string }> = [];
-
-      // Step 2: Upload each file to Shopify's staged URL
-      for (let i = 0; i < targets.length; i++) {
-        const target = targets[i];
-        const file = fileMapRef.current.get(target.filename);
+      // Upload each file to the server (server handles staged uploads)
+      for (let i = 0; i < matched.length; i++) {
+        const match = matched[i];
+        const file = fileMapRef.current.get(match.image.name);
 
         if (!file) {
-          console.error(`File not found: ${target.filename}`);
+          console.error(`File not found: ${match.image.name}`);
+          results.push({
+            filename: match.image.name,
+            productId: match.product!.id,
+            success: false,
+            error: "File not found",
+          });
           continue;
         }
 
-        setUploadProgress(`Uploading ${i + 1} of ${targets.length}: ${target.filename}`);
+        setUploadProgress(`Uploading ${i + 1} of ${matched.length}: ${match.image.name}`);
 
         try {
-          // Create form data with all parameters
-          const uploadFormData = new FormData();
-          for (const param of target.parameters) {
-            uploadFormData.append(param.name, param.value);
-          }
-          uploadFormData.append("file", file);
+          const formData = new FormData();
+          formData.append("intent", "upload-file");
+          formData.append("file", file);
+          formData.append("productId", match.product!.id);
 
-          // Upload to the staged URL
-          const uploadResponse = await fetch(target.url, {
+          const response = await fetch("/app/api/upload", {
             method: "POST",
-            body: uploadFormData,
+            body: formData,
           });
+          const data = await response.json();
 
-          if (uploadResponse.ok) {
-            successfulUploads.push({
-              productId: target.productId,
-              resourceUrl: target.resourceUrl,
-              filename: target.filename,
-            });
-          } else {
-            console.error(`Failed to upload ${target.filename}:`, await uploadResponse.text());
-          }
+          results.push({
+            filename: match.image.name,
+            productId: match.product!.id,
+            success: data.success,
+            error: data.error,
+          });
         } catch (uploadError) {
-          console.error(`Error uploading ${target.filename}:`, uploadError);
+          console.error(`Error uploading ${match.image.name}:`, uploadError);
+          results.push({
+            filename: match.image.name,
+            productId: match.product!.id,
+            success: false,
+            error: uploadError instanceof Error ? uploadError.message : "Upload failed",
+          });
         }
       }
 
-      // Step 3: Attach uploaded media to products
-      if (successfulUploads.length > 0) {
-        setUploadProgress("Attaching images to products...");
+      setUploadResults(results);
+      const succeeded = results.filter((r) => r.success).length;
+      const failed = results.filter((r) => !r.success).length;
 
-        const attachResponse = await fetch("/app/api/upload", {
-          method: "POST",
-          body: new URLSearchParams({
-            intent: "attach-media",
-            attachments: JSON.stringify(successfulUploads),
-          }),
-        });
-        const attachData = await attachResponse.json();
-
-        if (attachData.results) {
-          setUploadResults(attachData.results);
-          const succeeded = attachData.results.filter((r: UploadResult) => r.success).length;
-          const failed = attachData.results.filter((r: UploadResult) => !r.success).length;
-
-          if (succeeded > 0) {
-            shopify.toast.show(`Successfully uploaded ${succeeded} images${failed > 0 ? `, ${failed} failed` : ""}`);
-            
-            // Remove successfully uploaded images from the list
-            const successfulFilenames = new Set(
-              attachData.results
-                .filter((r: UploadResult) => r.success)
-                .map((r: UploadResult) => r.filename)
-            );
-            setImages((prev) => prev.filter((img) => !successfulFilenames.has(img.name)));
-          } else if (failed > 0) {
-            shopify.toast.show(`Failed to upload ${failed} images`, { isError: true });
-          }
-        }
-      } else {
-        shopify.toast.show("No images were uploaded successfully", { isError: true });
+      if (succeeded > 0) {
+        shopify.toast.show(`Successfully uploaded ${succeeded} images${failed > 0 ? `, ${failed} failed` : ""}`);
+        
+        // Remove successfully uploaded images from the list
+        const successfulFilenames = new Set(
+          results.filter((r) => r.success).map((r) => r.filename)
+        );
+        setImages((prev) => prev.filter((img) => !successfulFilenames.has(img.name)));
+      } else if (failed > 0) {
+        shopify.toast.show(`Failed to upload ${failed} images`, { isError: true });
       }
     } catch (error) {
       console.error("Upload error:", error);
