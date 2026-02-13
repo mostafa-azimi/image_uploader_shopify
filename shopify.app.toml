@@ -2,12 +2,11 @@
 
 client_id = "ee6edbce38610269e93fff5447db5208"
 name = "bulk_image_uploader"
-application_url = "https://example.com"
+application_url = "https://image-uploader-shopify.vercel.app"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2026-04"
@@ -25,4 +24,4 @@ api_version = "2026-04"
 scopes = "write_products"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://image-uploader-shopify.vercel.app/auth/callback", "https://image-uploader-shopify.vercel.app/auth/shopify/callback", "https://image-uploader-shopify.vercel.app/api/auth/callback" ]
